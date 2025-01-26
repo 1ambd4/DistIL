@@ -1,9 +1,7 @@
 namespace DistIL.IR.Utils;
 
 using System.Text.RegularExpressions;
-
 using DistIL.Analysis;
-
 using MethodAttribs = System.Reflection.MethodAttributes;
 
 public class IRPrinter
@@ -18,9 +16,9 @@ public class IRPrinter
         using var tw = new StreamWriter(filename);
         ExportDot(method, tw, decorators);
     }
+
     public static void ExportDot(MethodBody method, TextWriter tw, IReadOnlyList<IPrintDecorator>? decorators = null)
     {
-        var pc = new GraphvizPrintContext(tw, method.GetSymbolTable());
         bool hasGuards = false;
 
         tw.WriteLine("digraph {");
@@ -29,49 +27,7 @@ public class IRPrinter
         tw.WriteLine("  bgcolor=\"#303031\"");
 
         foreach (var block in method) {
-            tw.Write($"  {block}[label=<\n");
-            tw.Write("    <table border='0' cellborder='1' cellspacing='0' cellpadding='4' bgcolor='#1E1E1E'>\n");
-            tw.Write("      <tr><td colspan='2' balign='left'>\n");
-
-            tw.Write($"{block}:\n");
-            Decorate(d => d.DecorateLabel(pc, block));
-
-            int i = 0;
-            pc.Push();
-            foreach (var inst in block) {
-                if (i++ != 0) pc.PrintLine();
-                inst.Print(pc);
-                Decorate(d => d.DecorateInst(pc, inst));
-            }
-            pc.Pop();
-
-            tw.Write("</td></tr>\n");
-            tw.Write("    </table>\n");
-            tw.Write("  >]\n");
-
-            foreach (var succ in block.Succs) {
-                string port = "s";
-                var style = new GraphvizEdgeStyle();
-
-                if (block.Last is BranchInst { IsConditional: true } br) {
-                    port = succ == br.Then ? "sw" : "se";
-                } else if (block.Last is LeaveInst) {
-                    style.Color = "red";
-                } else if (block.Last is ResumeInst) {
-                    style.Color = "gray";
-                    style.Dashed = true;
-                }
-                if (block.Guards().Any(g => g.HandlerBlock == succ || g.FilterBlock == succ)) {
-                    port = "e";
-                    style.Dashed = true;
-                    style.Color = "gray";
-                }
-                Decorate(d => d.DecorateEdge(block, succ, ref style));
-                tw.Write($"  {block}:{port} -> {succ}{style}\n");
-            }
-            tw.Write("\n");
-
-            hasGuards |= block.Guards().Any();
+            BBPrinter.ExportDot(block, tw, ref hasGuards, decorators);
         }
         if (hasGuards) {
             int clusterId = 0;
@@ -100,15 +56,6 @@ public class IRPrinter
             }
         }
         tw.Write("}\n");
-
-        void Decorate(Action<IPrintDecorator> fn)
-        {
-            if (decorators != null) {
-                foreach (var decor in decorators) {
-                    fn(decor);
-                }
-            }
-        }
     }
 
     public static void ExportPlain(MethodBody method, string filename)
@@ -116,6 +63,7 @@ public class IRPrinter
         using var tw = new StreamWriter(filename);
         ExportPlain(method, tw);
     }
+
     public static void ExportPlain(MethodBody method, TextWriter tw)
     {
         var pc = tw == Console.Out // TODO: better api for this
@@ -142,18 +90,7 @@ public class IRPrinter
         }
 
         foreach (var block in method) {
-            pc.Print($"{block}:");
-            if (block.NumPreds > 0) {
-                pc.Print($" // preds: {string.Join(" ", block.Preds.AsEnumerable())}");
-            }
-            pc.Push();
-
-            int i = 0;
-            foreach (var inst in block) {
-                if (i++ > 0) pc.PrintLine();
-                inst.Print(pc);
-            }
-            pc.Pop();
+            BBPrinter.ExportPlain(block, pc);
         }
         pc.Print("}");
     }
@@ -209,86 +146,6 @@ public class IRPrinter
         return str;
     }
 
-    class GraphvizPrintContext : PrintContext
-    {
-        public GraphvizPrintContext(TextWriter output, SymbolTable symTable)
-            : base(output, symTable) { }
-
-        public override void Print(string str, PrintToner toner = PrintToner.Default)
-        {
-            str = Regex.Replace(str, @"[&<>\n]", m => m.ValueSpan switch {
-                "&" => "&amp;",
-                "<" => "&lt;",
-                ">" => "&gt;",
-                "\n" => "<br/>\n",
-                _ => m.Value
-            });
-
-            // Graphviz doesn't render spaces between font tags correctly,
-            // this workaround seem to work most of the time.
-            int untrimmedLen = str.Length;
-            str = str.TrimStart(' ');
-
-            if (str.Length != untrimmedLen) {
-                string ws = new(' ', untrimmedLen - str.Length);
-                Output.Write("<b>" + ws + "</b>");
-            }
-            
-            string? color = null;
-            if (toner != PrintToner.Default && _colors.TryGetValue(toner, out color)) {
-                Output.Write($"<font color=\"{color}\">");
-            }
-            Output.Write(str);
-            
-            if (color != null) Output.Write("</font>");
-        }
-
-        static readonly Dictionary<PrintToner, string> _colors = new() {
-            // VS Dark palette
-            { PrintToner.Keyword,    "#569cd6" },
-            { PrintToner.Comment,    "#6a9955" },
-            { PrintToner.VarName,    "#9cdcfe" },
-            { PrintToner.InstName,   "#c586c0" },
-            { PrintToner.ClassName,  "#4ec9b0" },
-            { PrintToner.StructName, "#86C691" },
-            { PrintToner.MemberName, "#4fc1ff" },
-            { PrintToner.MethodName, "#dcdcaa" },
-            { PrintToner.String,     "#ce9178" },
-            { PrintToner.Number,     "#b5cea8" },
-        };
-    }
-    class VTAnsiPrintContext : PrintContext
-    {
-        const string Esc = "\x1B[";
-
-        public VTAnsiPrintContext(TextWriter output, SymbolTable symTable)
-            : base(output, symTable) { }
-
-        public override void Print(string str, PrintToner toner = PrintToner.Default)
-        {
-            string? color = null;
-            if (toner != PrintToner.Default && _colors.TryGetValue(toner, out color)) {
-                Output.Write(color);
-            }
-            Output.Write(str);
-
-            if (color != null) Output.Write(Esc + "0m"); // reset
-        }
-
-        static readonly Dictionary<PrintToner, string> _colors = new() {
-            { PrintToner.Keyword,    Esc + "94m" }, // Bright Blue
-            { PrintToner.Comment,    Esc + "32m" }, // Dark Green
-            { PrintToner.VarName,    Esc + "97m" }, // White
-            { PrintToner.InstName,   Esc + "95m" }, // Bright Magenta
-            { PrintToner.ClassName,  Esc + "36m" }, // Cyan
-            { PrintToner.StructName, Esc + "96m" }, // Bright Cyan
-            { PrintToner.MemberName, Esc + "37m" }, // Light Gray
-            { PrintToner.MethodName, Esc + "93m" }, // Yellow
-            { PrintToner.String,     Esc + "92m" }, // Green
-            { PrintToner.Number,     Esc + "92m" }, // Green
-        };
-    }
-
     class ForestPrintContext : PrintContext
     {
         readonly ForestAnalysis _forest;
@@ -312,6 +169,107 @@ public class IRPrinter
     }
 }
 
+public class BBPrinter
+{
+    public static void ExportDot(BasicBlock block, string filename, IReadOnlyList<IPrintDecorator>? decorators = null)
+    {
+        using var tw = new StreamWriter(filename);
+        bool hasGuards = false;
+
+        tw.WriteLine("digraph {");
+        tw.WriteLine("  node[shape=plaintext fontname=consolas fontsize=12 fontcolor=\"#D4D4D4\"]");
+        tw.WriteLine("  edge[fontname=consolas fontsize=10 fontcolor=\"#D4D4D4\"]");
+        tw.WriteLine("  bgcolor=\"#303031\"");
+
+        ExportDot(block, tw, ref hasGuards);
+
+        tw.Write("}\n");
+    }
+
+    public static void ExportDot(BasicBlock block, TextWriter tw, ref bool hasGuards, IReadOnlyList<IPrintDecorator>? decorators = null)
+    {
+        var pc = new GraphvizPrintContext(tw, block.Method.GetSymbolTable());
+
+        tw.Write($"  {block}[label=<\n");
+        tw.Write("    <table border='0' cellborder='1' cellspacing='0' cellpadding='4' bgcolor='#1E1E1E'>\n");
+        tw.Write("      <tr><td colspan='2' balign='left'>\n");
+
+        tw.Write($"{block}:\n");
+        Decorate(d => d.DecorateLabel(pc, block));
+
+        int i = 0;
+        pc.Push();
+        foreach (var inst in block) {
+            if (i++ != 0) pc.PrintLine();
+            inst.Print(pc);
+            Decorate(d => d.DecorateInst(pc, inst));
+        }
+        pc.Pop();
+
+        tw.Write("</td></tr>\n");
+        tw.Write("    </table>\n");
+        tw.Write("  >]\n");
+
+        foreach (var succ in block.Succs) {
+            string port = "s";
+            var style = new GraphvizEdgeStyle();
+
+            if (block.Last is BranchInst { IsConditional: true } br) {
+                port = succ == br.Then ? "sw" : "se";
+            } else if (block.Last is LeaveInst) {
+                style.Color = "red";
+            } else if (block.Last is ResumeInst) {
+                style.Color = "gray";
+                style.Dashed = true;
+            }
+            if (block.Guards().Any(g => g.HandlerBlock == succ || g.FilterBlock == succ)) {
+                port = "e";
+                style.Dashed = true;
+                style.Color = "gray";
+            }
+            Decorate(d => d.DecorateEdge(block, succ, ref style));
+            tw.Write($"  {block}:{port} -> {succ}{style}\n");
+        }
+        tw.Write("\n");
+
+        hasGuards |= block.Guards().Any();
+
+        void Decorate(Action<IPrintDecorator> fn)
+        {
+            if (decorators != null) {
+                foreach (var decor in decorators) {
+                    fn(decor);
+                }
+            }
+        }
+    }
+
+    public static void ExportPlain(BasicBlock block, TextWriter tw)
+    {
+        var pc = tw == Console.Out // TODO: better api for this
+            ? new VTAnsiPrintContext(tw, block.Method.GetSymbolTable())
+            : new PrintContext(tw, block.Method.GetSymbolTable());
+
+        ExportPlain(block, pc);
+    }
+
+    public static void ExportPlain(BasicBlock block, PrintContext pc)
+    {
+        pc.Print($"{block}:");
+        if (block.NumPreds > 0) {
+            pc.Print($" // preds: {string.Join(" ", block.Preds.AsEnumerable())}");
+        }
+        pc.Push();
+
+        int i = 0;
+        foreach (var inst in block) {
+            if (i++ > 0) pc.PrintLine();
+            inst.Print(pc);
+        }
+        pc.Pop();
+    }
+}
+
 /// <summary> Prints additional information on specific locations of the textual form IR. </summary>
 public interface IPrintDecorator
 {
@@ -321,6 +279,7 @@ public interface IPrintDecorator
     /// <remarks> Graphviz only. </remarks>
     void DecorateEdge(BasicBlock block, BasicBlock succ, ref GraphvizEdgeStyle style) { }
 }
+
 public struct GraphvizEdgeStyle
 {
     public string? Color;
@@ -343,4 +302,85 @@ public struct GraphvizEdgeStyle
             }
         }
     }
+}
+
+class VTAnsiPrintContext : PrintContext
+{
+    const string Esc = "\x1B[";
+
+    public VTAnsiPrintContext(TextWriter output, SymbolTable symTable)
+        : base(output, symTable) { }
+
+    public override void Print(string str, PrintToner toner = PrintToner.Default)
+    {
+        string? color = null;
+        if (toner != PrintToner.Default && _colors.TryGetValue(toner, out color)) {
+            Output.Write(color);
+        }
+        Output.Write(str);
+
+        if (color != null) Output.Write(Esc + "0m"); // reset
+    }
+
+    static readonly Dictionary<PrintToner, string> _colors = new() {
+        { PrintToner.Keyword,    Esc + "94m" }, // Bright Blue
+        { PrintToner.Comment,    Esc + "32m" }, // Dark Green
+        { PrintToner.VarName,    Esc + "97m" }, // White
+        { PrintToner.InstName,   Esc + "95m" }, // Bright Magenta
+        { PrintToner.ClassName,  Esc + "36m" }, // Cyan
+        { PrintToner.StructName, Esc + "96m" }, // Bright Cyan
+        { PrintToner.MemberName, Esc + "37m" }, // Light Gray
+        { PrintToner.MethodName, Esc + "93m" }, // Yellow
+        { PrintToner.String,     Esc + "92m" }, // Green
+        { PrintToner.Number,     Esc + "92m" }, // Green
+    };
+}
+
+class GraphvizPrintContext : PrintContext
+{
+    public GraphvizPrintContext(TextWriter output, SymbolTable symTable)
+        : base(output, symTable) { }
+
+    public override void Print(string str, PrintToner toner = PrintToner.Default)
+    {
+        str = Regex.Replace(str, @"[&<>\n]", m => m.ValueSpan switch {
+            "&" => "&amp;",
+            "<" => "&lt;",
+            ">" => "&gt;",
+            "\n" => "<br/>\n",
+            _ => m.Value
+        });
+
+        // Graphviz doesn't render spaces between font tags correctly,
+        // this workaround seem to work most of the time.
+        int untrimmedLen = str.Length;
+        str = str.TrimStart(' ');
+
+        if (str.Length != untrimmedLen) {
+            string ws = new(' ', untrimmedLen - str.Length);
+            Output.Write("<b>" + ws + "</b>");
+        }
+
+        string? color = null;
+        if (toner != PrintToner.Default && _colors.TryGetValue(toner, out color)) {
+            Output.Write($"<font color=\"{color}\">");
+        }
+        Output.Write(str);
+
+        if (color != null) Output.Write("</font>");
+    }
+
+    static readonly Dictionary<PrintToner, string> _colors = new() {
+        // VS Dark palette
+        { PrintToner.Keyword,    "#569cd6" },
+        { PrintToner.Comment,    "#6a9955" },
+        { PrintToner.VarName,    "#9cdcfe" },
+        { PrintToner.InstName,   "#c586c0" },
+        { PrintToner.ClassName,  "#4ec9b0" },
+        { PrintToner.StructName, "#86C691" },
+        { PrintToner.MemberName, "#4fc1ff" },
+        { PrintToner.MethodName, "#dcdcaa" },
+        { PrintToner.String,     "#ce9178" },
+        { PrintToner.Number,     "#b5cea8" },
+    };
 }
