@@ -11,3 +11,7 @@ artifacts/
 # Misc
 logs/
 BenchmarkDotNet.Artifacts/
+
+# docfx
+_site/
+api/

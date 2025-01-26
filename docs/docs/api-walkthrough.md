@@ -27,7 +27,7 @@ MethodBody body = ILImporter.ParseCode(method); // Parse IL into a control flow 
 method.ILBody = ILGenerator.GenerateCode(body); // Generate IL code, taking care of register allocation and SSA-destruction
 ```
 
-The freshly parsed IR will contain many variables out of SSA-form, leaving the data-flow obscured through load and store instructions. The dedicated SSA promotion pass can be applied to fix this, but it requires the setup of the `Compilation` and `PassManager` classes. See [DistIL.Cli's source](../src/DistIL.Cli/Program.cs).
+The freshly parsed IR will contain many variables out of SSA-form, leaving the data-flow obscured through load and store instructions. The dedicated SSA promotion pass can be applied to fix this, but it requires the setup of the `Compilation` and `PassManager` classes. See [DistIL.Cli's source](../../src/DistIL.Cli/Program.cs).
 
 The `ILGenerator` is able to generate reasonably compact IL by traversing expression trees that are implicitly built over the linear IR (by flagging SSA defs as leafs or branches). It also uses a register allocator based on a simple graph-coloring algorithm to reduce the final number of variables required.
 

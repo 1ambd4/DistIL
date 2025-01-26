@@ -45,6 +45,7 @@ public float Aggregate() {
 ### Benchmarks
 
 [Source](/tests/Benchmarks/LinqExpansion.cs)
+
 | Method         | Toolchain         | Mean          | Error       | StdDev      | Ratio |
 |--------------- |------------------ |--------------:|------------:|------------:|------:|
 | FilterObjects  | .NET 8.0          |     11.543 us |   0.0517 us |   0.0553 us |  1.00 |

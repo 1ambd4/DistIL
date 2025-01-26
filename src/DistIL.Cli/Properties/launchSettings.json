@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "DistIL.Cli": {
+      "commandName": "Project",
+      "commandLineArgs": "-i C:\\Users\\1ambd4\\Temp\\temp\\DistIL.dll -o C:\\Users\\1ambd4\\Temp\\temp\\DistIL-Opt.dll --dump-dir C:\\Users\\1ambd4\\Temp\\temp\\dump\\ --dump-fmts Graphviz --purge-dumps --verbosity Trace",
+      "nativeDebugging": true
+    }
+  }
+}
